@@ -1,6 +1,7 @@
 import time
 import RPi.GPIO as GPIO
 
+GPIO.setwarnings(False)
 
 GPIO.setmode(GPIO.BCM)
 
@@ -42,10 +43,6 @@ class Dist():
 if __name__ == '__main__':
     LVEZ1 = Dist()
 
-    print("Start")
-
-    for i in range(10):
+    while True:
         print(LVEZ1.Measure(18))
         time.sleep(1)
-
-    print("END")
