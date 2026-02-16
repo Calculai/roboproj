@@ -13,7 +13,6 @@ blink_start = 0
 last_toggle = 0
 LED_STATE = False
 
-
 class Dist:
     def Measure(self, gp):
         GPIO_TRIGECHO = gp

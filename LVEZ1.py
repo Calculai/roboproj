@@ -5,8 +5,6 @@ GPIO.setwarnings(False)
 
 GPIO.setmode(GPIO.BCM)
 
-
-
 class Dist():
     def __init__(self):
         pass
