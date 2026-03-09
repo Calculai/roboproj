@@ -63,42 +63,43 @@ class Turtlebot3ObstacleDetection(Node):
         if self.has_scan_received:
             self.detect_obstacle()
 
+ 
     def detect_obstacle(self):
+        # Define the indices for the sectors
+        # 0 to 90 degrees is the first quarter of the array
+        left_limit = int(len(self.scan_ranges) / 4)
+        # 270 to 360 degrees is the last quarter of the array
+        right_limit = int(len(self.scan_ranges) * 3 / 4)
 
-        left_range = int(len(self.scan_ranges) / 4)
-        right_range = int(len(self.scan_ranges) * 3 / 4)
+        # 1. Extract and clean the sectors
+        # Left sector: 0 to 90 degrees
+        left_sector = [r for r in self.scan_ranges[0:left_limit] if 0.01 < r < float('inf')]
+        # Right sector: 270 to 360 degrees
+        right_sector = [r for r in self.scan_ranges[right_limit:] if 0.01 < r < float('inf')]
 
-        # Use only front scan region (-90° to +90°)
-        front_ranges = self.scan_ranges[0:left_range] + self.scan_ranges[right_range:]
-
-        # Remove invalid lidar readings
-        valid_ranges = [r for r in front_ranges if r > 0.01 and r < float('inf')]
-
-        if valid_ranges:
-            obstacle_distance = min(valid_ranges)
-        else:
-            obstacle_distance = float('inf')
+        # 2. Find minimum distance in each sector
+        dist_left = min(left_sector) if left_sector else float('inf')
+        dist_right = min(right_sector) if right_sector else float('inf')
 
         twist = Twist()
 
-        if obstacle_distance < self.stop_distance:
-
+        # 3. Decision Logic
+        # Case A: Obstacle on the Left (0 to 90 deg) -> Turn Right
+        if dist_left < self.stop_distance:
             twist.linear.x = 0.0
-            twist.angular.z = self.tele_twist.angular.z
+            twist.angular.z = -0.5  # Negative value to rotate clockwise (right)
+            self.get_logger().info(f'Obstacle LEFT ({dist_left:.2f}m). Turning RIGHT.')
 
-            self.get_logger().info(
-                f'Obstacle detected at {obstacle_distance:.2f} meters! Stopping.',
-                throttle_duration_sec=2
-            )
+        # Case B: Obstacle on the Right (-1 to -90 deg) -> Turn Left
+        elif dist_right < self.stop_distance:
+            twist.linear.x = 0.0
+            twist.angular.z = 0.5   # Positive value to rotate counter-clockwise (left)
+            self.get_logger().info(f'Obstacle RIGHT ({dist_right:.2f}m). Turning LEFT.')
 
+        # Case C: Path is clear
         else:
-
             twist = self.tele_twist
-
-            self.get_logger().info(
-                f'Clear path. Nearest obstacle at {obstacle_distance:.2f} meters.',
-                throttle_duration_sec=2
-            )
+            # No logging here to keep the terminal clean unless there's a state change
 
         self.cmd_vel_pub.publish(twist)
 
