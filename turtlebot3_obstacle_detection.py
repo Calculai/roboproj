@@ -5,11 +5,21 @@
 # Licensed under the Apache License, Version 2.0 (the "License");
 
 from geometry_msgs.msg import Twist
+import os
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import LaserScan
+import sys
+import time
+
+if os.name == 'nt':
+    import msvcrt
+else:
+    import select
+    import termios
+    import tty
 
 
 class Turtlebot3ObstacleDetection(Node):
@@ -54,8 +64,17 @@ class Turtlebot3ObstacleDetection(Node):
         self.speed_updates = 0
         self.speed_accumulation = 0.0
 
+        # Keyboard shutdown tracking
+        self.shutdown_key = 'q'
+        self.keyboard_available = False
+        self.shutdown_requested = False
+        self.stdin_fd = None
+        self.original_terminal_settings = None
+        self.setup_keyboard_shutdown()
+
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
+        self.shutdown_timer = self.create_timer(0.5, self.check_shutdown_key)
 
     def scan_callback(self, msg):
         self.scan_ranges = msg.ranges
@@ -63,6 +82,41 @@ class Turtlebot3ObstacleDetection(Node):
 
     def cmd_vel_raw_callback(self, msg):
         self.tele_twist = msg
+
+    def setup_keyboard_shutdown(self):
+        try:
+            if os.name == 'nt':
+                self.keyboard_available = True
+            elif sys.stdin.isatty():
+                self.stdin_fd = sys.stdin.fileno()
+                self.original_terminal_settings = termios.tcgetattr(self.stdin_fd)
+                tty.setcbreak(self.stdin_fd)
+                self.keyboard_available = True
+        except Exception as error:
+            self.get_logger().warn(f'Keyboard shutdown setup failed: {error}')
+
+        if self.keyboard_available:
+            self.get_logger().info(f"Press '{self.shutdown_key}' to shutdown.")
+        else:
+            self.get_logger().warn('Keyboard shutdown unavailable in this terminal.')
+
+    def check_shutdown_key(self):
+        if not self.keyboard_available:
+            return
+
+        key = None
+
+        if os.name == 'nt':
+            if msvcrt.kbhit():
+                key = msvcrt.getwch()
+        else:
+            ready, _, _ = select.select([sys.stdin], [], [], 0)
+            if ready:
+                key = sys.stdin.read(1)
+
+        if key and key.lower() == self.shutdown_key:
+            self.get_logger().info('Shutdown key pressed. Exiting node...')
+            self.shutdown_requested = True
 
     def log_speed_stats(self):
         if self.speed_updates > 0:
@@ -162,6 +216,23 @@ class Turtlebot3ObstacleDetection(Node):
 
         self.cmd_vel_pub.publish(twist)
 
+    def destroy_node(self):
+        if os.name != 'nt' and self.original_terminal_settings is not None and self.stdin_fd is not None:
+            try:
+                termios.tcsetattr(self.stdin_fd, termios.TCSADRAIN, self.original_terminal_settings)
+            except Exception as error:
+                self.get_logger().warn(f'Failed to restore terminal settings: {error}')
+
+        stop_twist = Twist()
+        stop_twist.linear.x = 0.0
+        stop_twist.angular.z = 0.0
+        self.cmd_vel_pub.publish(stop_twist)
+        time.sleep(0.1)
+
+        self.log_speed_stats()
+        
+        super().destroy_node()
+
 
 def main(args=None):
 
@@ -169,10 +240,15 @@ def main(args=None):
 
     turtlebot3_obstacle_detection = Turtlebot3ObstacleDetection()
 
-    rclpy.spin(turtlebot3_obstacle_detection)
-
-    turtlebot3_obstacle_detection.destroy_node()
-    rclpy.shutdown()
+    try:
+        while rclpy.ok() and not turtlebot3_obstacle_detection.shutdown_requested:
+            rclpy.spin_once(turtlebot3_obstacle_detection, timeout_sec=0.1)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        turtlebot3_obstacle_detection.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
