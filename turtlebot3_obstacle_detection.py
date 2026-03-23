@@ -50,7 +50,12 @@ class Turtlebot3ObstacleDetection(Node):
             qos_profile=qos_profile_sensor_data
         )
 
+        # Speed tracking
+        self.speed_updates = 0
+        self.speed_accumulation = 0.0
+
         self.timer = self.create_timer(0.1, self.timer_callback)
+        self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
 
     def scan_callback(self, msg):
         self.scan_ranges = msg.ranges
@@ -58,6 +63,15 @@ class Turtlebot3ObstacleDetection(Node):
 
     def cmd_vel_raw_callback(self, msg):
         self.tele_twist = msg
+
+    def log_speed_stats(self):
+        if self.speed_updates > 0:
+            average_speed = self.speed_accumulation / self.speed_updates
+            self.get_logger().info(
+                f'Speed Updates: {self.speed_updates}, '
+                f'Speed Accumulation: {self.speed_accumulation:.2f}, '
+                f'Average Linear Speed: {average_speed:.4f} m/s'
+            )
 
     def timer_callback(self):
         if self.has_scan_received:
@@ -141,6 +155,10 @@ class Turtlebot3ObstacleDetection(Node):
 
         else:
             twist = self.tele_twist
+
+        # Track speed updates
+        self.speed_updates += 1
+        self.speed_accumulation += twist.linear.x
 
         self.cmd_vel_pub.publish(twist)
 
