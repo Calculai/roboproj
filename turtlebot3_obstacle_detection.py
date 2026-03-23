@@ -64,6 +64,10 @@ class Turtlebot3ObstacleDetection(Node):
         self.speed_updates = 0
         self.speed_accumulation = 0.0
 
+        # Auto shutdown after fixed runtime
+        self.max_runtime_seconds = 120.0
+        self.start_time = time.monotonic()
+
         # Keyboard shutdown tracking
         self.shutdown_key = 'q'
         self.keyboard_available = False
@@ -100,6 +104,8 @@ class Turtlebot3ObstacleDetection(Node):
         else:
             self.get_logger().warn('Keyboard shutdown unavailable in this terminal.')
 
+        self.get_logger().info(f'Auto shutdown after {self.max_runtime_seconds:.0f} seconds.')
+
     def check_shutdown_key(self):
         if not self.keyboard_available:
             return
@@ -120,8 +126,10 @@ class Turtlebot3ObstacleDetection(Node):
 
     def log_speed_stats(self):
         if self.speed_updates > 0:
+            elapsed_seconds = time.monotonic() - self.start_time
             average_speed = self.speed_accumulation / self.speed_updates
             self.get_logger().info(
+                f'Elapsed Time: {elapsed_seconds:.1f}s, '
                 f'Speed Updates: {self.speed_updates}, '
                 f'Speed Accumulation: {self.speed_accumulation:.2f}, '
                 f'Average Linear Speed: {average_speed:.4f} m/s'
@@ -242,6 +250,14 @@ def main(args=None):
 
     try:
         while rclpy.ok() and not turtlebot3_obstacle_detection.shutdown_requested:
+            elapsed_seconds = time.monotonic() - turtlebot3_obstacle_detection.start_time
+            if elapsed_seconds >= turtlebot3_obstacle_detection.max_runtime_seconds:
+                turtlebot3_obstacle_detection.get_logger().info(
+                    'Auto shutdown timeout reached (120 seconds). Exiting node...'
+                )
+                turtlebot3_obstacle_detection.shutdown_requested = True
+                continue
+
             rclpy.spin_once(turtlebot3_obstacle_detection, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
