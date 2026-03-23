@@ -36,7 +36,7 @@ class Turtlebot3ObstacleDetection(Node):
         self.scan_ranges = []
         self.has_scan_received = False
 
-        self.stop_distance = 0.2
+        self.stop_distance = 0.22
 
         self.tele_twist = Twist()
         self.tele_twist.linear.x = 0.2
