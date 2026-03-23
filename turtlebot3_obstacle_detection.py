@@ -19,14 +19,14 @@ class Turtlebot3ObstacleDetection(Node):
 
         print('TurtleBot3 Obstacle Detection - Quadrant Navigation')
         print('----------------------------------------------')
-        print('Inner sectors prioritized for obstacle detection')
-        print('stop distance: 0.25 m')
+        print('Escapepath method')
+        print('stop distance: 0.20 m')
         print('----------------------------------------------')
 
         self.scan_ranges = []
         self.has_scan_received = False
 
-        self.stop_distance = 0.25
+        self.stop_distance = 0.2
 
         self.tele_twist = Twist()
         self.tele_twist.linear.x = 0.2
@@ -65,6 +65,12 @@ class Turtlebot3ObstacleDetection(Node):
 
     def detect_obstacle(self):
 
+        # angular velocity for turns
+        A = 0.5
+
+        # linear velocity for turns
+        L = 0.0
+
         # Sector boundaries
         left_inner_limit = int(len(self.scan_ranges) / 8)        # 45°
         left_outer_limit = int(len(self.scan_ranges) / 4)        # 90°
@@ -73,11 +79,11 @@ class Turtlebot3ObstacleDetection(Node):
         right_inner_limit = int(len(self.scan_ranges) * 7 / 8)   # 315°
 
         # Extract sectors and remove invalid values
-        left_inner  = [r for r in self.scan_ranges[0:left_inner_limit] if 0.01 < r < float('inf')]
-        left_outer  = [r for r in self.scan_ranges[left_inner_limit:left_outer_limit] if 0.01 < r < float('inf')]
+        left_inner  = [r for r in self.scan_ranges[0:left_inner_limit] if 0.12 < r < 3.5]
+        left_outer  = [r for r in self.scan_ranges[left_inner_limit:left_outer_limit] if 0.12 < r < 3.5]
 
-        right_outer = [r for r in self.scan_ranges[right_outer_limit:right_inner_limit] if 0.01 < r < float('inf')]
-        right_inner = [r for r in self.scan_ranges[right_inner_limit:] if 0.01 < r < float('inf')]
+        right_outer = [r for r in self.scan_ranges[right_outer_limit:right_inner_limit] if 0.12 < r < 3.5]
+        right_inner = [r for r in self.scan_ranges[right_inner_limit:] if 0.12 < r < 3.5]
 
         # Compute minimum distances
         dist_left_outer = min(left_outer) if left_outer else float('inf')
@@ -92,45 +98,45 @@ class Turtlebot3ObstacleDetection(Node):
         if dist_left_inner < self.stop_distance:
 
             if dist_right_inner > self.stop_distance:
-                twist.linear.x = 0.0
-                twist.angular.z = -0.5
+                twist.linear.x = L 
+                twist.angular.z = -A
                 self.get_logger().info(f'Inner LEFT blocked ({dist_left_inner:.2f}m). Turning RIGHT.')
 
             elif dist_right_outer > self.stop_distance:
-                twist.linear.x = 0.0
-                twist.angular.z = -0.5
+                twist.linear.x = L
+                twist.angular.z = -A
                 self.get_logger().info('Inner sectors blocked. Using outer RIGHT.')
 
             elif dist_left_outer > self.stop_distance:
-                twist.linear.x = 0.0
-                twist.angular.z = 0.5
+                twist.linear.x = L
+                twist.angular.z = A
                 self.get_logger().info('Inner sectors blocked. Using outer LEFT.')
 
             else:
                 twist.linear.x = 0.0
-                twist.angular.z = 0.5
+                twist.angular.z = A
                 self.get_logger().info('Surrounded. Rotating LEFT.')
 
         elif dist_right_inner < self.stop_distance:
 
             if dist_left_inner > self.stop_distance:
-                twist.linear.x = 0.0
-                twist.angular.z = 0.5
+                twist.linear.x = L
+                twist.angular.z = A
                 self.get_logger().info(f'Inner RIGHT blocked ({dist_right_inner:.2f}m). Turning LEFT.')
 
             elif dist_left_outer > self.stop_distance:
-                twist.linear.x = 0.0
-                twist.angular.z = 0.5
+                twist.linear.x = L
+                twist.angular.z = A
                 self.get_logger().info('Inner sectors blocked. Using outer LEFT.')
 
             elif dist_right_outer > self.stop_distance:
-                twist.linear.x = 0.0
-                twist.angular.z = -0.5
+                twist.linear.x = L
+                twist.angular.z = -A
                 self.get_logger().info('Inner sectors blocked. Using outer RIGHT.')
 
             else:
                 twist.linear.x = 0.0
-                twist.angular.z = -0.5
+                twist.angular.z = -A
                 self.get_logger().info('Surrounded. Rotating RIGHT.')
 
         else:
