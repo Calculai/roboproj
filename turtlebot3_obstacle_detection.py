@@ -4,6 +4,10 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 
+# maybe add the mapping idea (make a dataset of all points and figure out valid spots and then make the minimum valid spot)
+# maybe make it find spots and then develop a curve (but issue is how to express it with twist when it is unreliable)
+# somehow make the map disfavor the direction it has already been if it encounters later
+
 from geometry_msgs.msg import Twist
 import os
 import rclpy
@@ -13,6 +17,7 @@ from rclpy.qos import QoSProfile
 from sensor_msgs.msg import LaserScan
 import sys
 import time
+import numpy as np
 
 if os.name == 'nt':
     import msvcrt
@@ -84,6 +89,21 @@ class Turtlebot3ObstacleDetection(Node):
         self.scan_ranges = msg.ranges
         self.has_scan_received = True
 
+    def calculate_regression_speeds(self, distance):
+        # base case for no obstacle or very close obstacle
+        if distance >= 0.40:
+            return 0.22, 0.0
+        if distance <= 0.20:
+            return 0.0, 1.8
+
+        # L: linear velocity regression (1.1 * distance - 0.22)
+        v_linear = (1.1 * distance) - 0.22
+        
+        # A: angular velocity regression (-9.0 * distance + 3.6)
+        v_angular = (-9.0 * distance) + 3.6
+        
+        return round(v_linear, 3), round(v_angular, 3)
+
     def cmd_vel_raw_callback(self, msg):
         self.tele_twist = msg
 
@@ -141,12 +161,6 @@ class Turtlebot3ObstacleDetection(Node):
 
     def detect_obstacle(self):
 
-        # angular velocity for turns
-        A = 0.5
-
-        # linear velocity for turns
-        L = 0.0
-
         # Sector boundaries
         left_inner_limit = int(len(self.scan_ranges) / 8)        # 45°
         left_outer_limit = int(len(self.scan_ranges) / 4)        # 90°
@@ -168,53 +182,39 @@ class Turtlebot3ObstacleDetection(Node):
         dist_right_inner = min(right_inner) if right_inner else float('inf')
         dist_right_outer = min(right_outer) if right_outer else float('inf')
 
+        # Find minimum distance
+        x = min(dist_left_inner, dist_right_inner)
+        # Determine angular and linear velocity
+        L, A = self.calculate_regression_speeds(x)
+
         twist = Twist()
-
-        # Decision logic using inner sectors first
-        if dist_left_inner < self.stop_distance:
-
-            if dist_right_inner > self.stop_distance:
-                twist.linear.x = L 
-                twist.angular.z = -A
-                self.get_logger().info(f'Inner LEFT blocked ({dist_left_inner:.2f}m). Turning RIGHT.')
-
-            elif dist_right_outer > self.stop_distance:
-                twist.linear.x = L
-                twist.angular.z = -A
-                self.get_logger().info('Inner sectors blocked. Using outer RIGHT.')
-
-            elif dist_left_outer > self.stop_distance:
-                twist.linear.x = L
-                twist.angular.z = A
-                self.get_logger().info('Inner sectors blocked. Using outer LEFT.')
-
+        
+        # Clean turn logic (uses regression values)
+        if x < 0.40:
+            twist.linear.x = L
+            
+            # Find escape path based on sectors
+            if dist_left_inner < dist_right_inner:
+                twist.angular.z = -A # Curve right
             else:
-                twist.linear.x = 0.0
-                twist.angular.z = A
-                self.get_logger().info('Surrounded. Rotating LEFT.')
-
-        elif dist_right_inner < self.stop_distance:
-
-            if dist_left_inner > self.stop_distance:
-                twist.linear.x = L
-                twist.angular.z = A
-                self.get_logger().info(f'Inner RIGHT blocked ({dist_right_inner:.2f}m). Turning LEFT.')
-
-            elif dist_left_outer > self.stop_distance:
-                twist.linear.x = L
-                twist.angular.z = A
-                self.get_logger().info('Inner sectors blocked. Using outer LEFT.')
-
-            elif dist_right_outer > self.stop_distance:
-                twist.linear.x = L
-                twist.angular.z = -A
-                self.get_logger().info('Inner sectors blocked. Using outer RIGHT.')
-
-            else:
-                twist.linear.x = 0.0
-                twist.angular.z = -A
-                self.get_logger().info('Surrounded. Rotating RIGHT.')
-
+                twist.angular.z = A  # Curve left
+                
+            # Closer than 0.22 we check special cases
+            if x < self.stop_distance:
+                if dist_left_inner < self.stop_distance:
+                    if dist_right_inner > self.stop_distance:
+                        twist.angular.z = -A
+                    elif dist_right_outer > self.stop_distance:
+                        twist.angular.z = -A
+                    elif dist_left_outer > self.stop_distance:
+                        twist.angular.z = A
+                elif dist_right_inner < self.stop_distance:
+                    if dist_left_inner > self.stop_distance:
+                        twist.angular.z = A
+                    elif dist_left_outer > self.stop_distance:
+                        twist.angular.z = A
+                    elif dist_right_outer > self.stop_distance:
+                        twist.angular.z = -A
         else:
             twist = self.tele_twist
 
