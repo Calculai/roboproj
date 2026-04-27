@@ -41,7 +41,7 @@ class Turtlebot3ObstacleDetection(Node):
         self.scan_ranges = []
         self.has_scan_received = False
 
-        self.stop_distance = 0.22
+        self.stop_distance = 0.20
 
         self.tele_twist = Twist()
         self.tele_twist.linear.x = 0.2
@@ -97,7 +97,7 @@ class Turtlebot3ObstacleDetection(Node):
             return 0.0, 1.8
 
         # L: linear velocity regression (1.1 * distance - 0.22)
-        v_linear = (1.1 * distance) - 0.22
+        v_linear = (1.1 * distance)
         
         # A: angular velocity regression (-9.0 * distance + 3.6)
         v_angular = (-9.0 * distance) + 3.6
