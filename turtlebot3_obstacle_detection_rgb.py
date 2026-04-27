@@ -18,6 +18,7 @@ from sensor_msgs.msg import LaserScan
 import sys
 import time
 import numpy as np
+from smbus2 import SMBus
 
 if os.name == 'nt':
     import msvcrt
@@ -41,8 +42,12 @@ class Turtlebot3ObstacleDetection(Node):
         self.scan_ranges = []
         self.has_scan_received = False
 
+        self.i2c_bus = None
+        self.light_sensor_address = 0x44
+        self.latest_rgb = {'red': 0, 'green': 0, 'blue': 0}
+        self.light_sensor_enabled = self.setup_light_sensor()
+
         self.stop_distance = 0.20
-        self.max_linear_velocity = 0.22
 
         self.tele_twist = Twist()
         self.tele_twist.linear.x = 0.2
@@ -69,7 +74,6 @@ class Turtlebot3ObstacleDetection(Node):
         # Speed tracking
         self.speed_updates = 0
         self.speed_accumulation = 0.0
-        self.current_linear_speed = 0.0
 
         # Auto shutdown after fixed runtime
         self.max_runtime_seconds = 120.0
@@ -86,6 +90,42 @@ class Turtlebot3ObstacleDetection(Node):
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
         self.shutdown_timer = self.create_timer(0.5, self.check_shutdown_key)
+        self.colour_timer = self.create_timer(1.0, self.update_colour_sensor)
+
+    def setup_light_sensor(self):
+        try:
+            self.i2c_bus = SMBus(1)
+            self.i2c_bus.write_byte_data(self.light_sensor_address, 0x01, 0x05)
+            time.sleep(0.5)
+            self.get_logger().info('ISL29125 colour sensor initialized.')
+            return True
+        except Exception as error:
+            self.get_logger().warn(f'Colour sensor setup failed: {error}')
+            self.i2c_bus = None
+            return False
+
+    def update_colour_sensor(self):
+        if not self.light_sensor_enabled or self.i2c_bus is None:
+            return
+
+        try:
+            data = self.i2c_bus.read_i2c_block_data(self.light_sensor_address, 0x09, 6)
+
+            green = (data[1] << 8) | data[0]
+            red = (data[3] << 8) | data[2]
+            blue = (data[5] << 8) | data[4]
+
+            red = int(red * 1)
+            green = int(green * 0.75)
+            blue = int(blue * 1.5)
+
+            self.latest_rgb = {'red': red, 'green': green, 'blue': blue}
+
+            self.get_logger().info(
+                f"RGB Values -> Red: {red} | Green: {green} | Blue: {blue}"
+            )
+        except Exception as error:
+            self.get_logger().warn(f'Failed reading colour sensor: {error}')
 
     def scan_callback(self, msg):
         self.scan_ranges = msg.ranges
@@ -108,9 +148,6 @@ class Turtlebot3ObstacleDetection(Node):
 
     def cmd_vel_raw_callback(self, msg):
         self.tele_twist = msg
-
-    def clamp_linear_velocity(self, linear_velocity):
-        return max(-self.max_linear_velocity, min(self.max_linear_velocity, linear_velocity))
 
     def setup_keyboard_shutdown(self):
         try:
@@ -156,7 +193,7 @@ class Turtlebot3ObstacleDetection(Node):
             self.get_logger().info(
                 f'Elapsed Time: {elapsed_seconds:.1f}s, '
                 f'Speed Updates: {self.speed_updates}, '
-                f'Current Speed: {self.current_linear_speed:.4f} m/s, '
+                f'Speed Accumulation: {self.speed_accumulation:.2f}, '
                 f'Average Linear Speed: {average_speed:.4f} m/s'
             )
 
@@ -223,11 +260,11 @@ class Turtlebot3ObstacleDetection(Node):
         else:
             twist = self.tele_twist
 
-        twist.linear.x = self.clamp_linear_velocity(twist.linear.x)
-        self.current_linear_speed = twist.linear.x
-
         # Track speed updates
         self.speed_updates += 1
+        self.get_logger().info(
+                f'Current speed: {twist.linear.x:.1f}s'
+            )
         self.speed_accumulation += twist.linear.x
 
         self.cmd_vel_pub.publish(twist)
@@ -238,6 +275,12 @@ class Turtlebot3ObstacleDetection(Node):
                 termios.tcsetattr(self.stdin_fd, termios.TCSADRAIN, self.original_terminal_settings)
             except Exception as error:
                 self.get_logger().warn(f'Failed to restore terminal settings: {error}')
+
+        if self.i2c_bus is not None:
+            try:
+                self.i2c_bus.close()
+            except Exception as error:
+                self.get_logger().warn(f'Failed to close I2C bus: {error}')
 
         stop_twist = Twist()
         stop_twist.linear.x = 0.0
