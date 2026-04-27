@@ -83,6 +83,12 @@ class Turtlebot3ObstacleDetection(Node):
         self.original_terminal_settings = None
         self.setup_keyboard_shutdown()
 
+        # Collision counter initialization
+        self.collision_threshold = 0.158  # Distance to count a collision
+        self.collision_count = 0
+        self.collision_cooldown = 2.0     # Seconds between allowed counts
+        self.last_collision_time = 0.0
+
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
         self.shutdown_timer = self.create_timer(0.5, self.check_shutdown_key)
@@ -191,6 +197,20 @@ class Turtlebot3ObstacleDetection(Node):
         x = min(dist_left_inner, dist_right_inner)
         # Determine angular and linear velocity
         L, A = self.calculate_regression_speeds(x)
+
+                # --- COLLISION COUNTER LOGIC ---
+        current_time = self.get_clock().now().nanoseconds / 1e9
+        min_inner_dist = min(dist_left_inner, dist_right_inner)
+        
+        # logical expression: collision if distance < 0.158 and cooldown has passed
+        is_colliding = min_inner_dist < self.collision_threshold
+        cooldown_elapsed = (current_time - self.last_collision_time) > self.collision_cooldown
+
+        if is_colliding and cooldown_elapsed:
+            self.collision_count += 1
+            self.last_collision_time = current_time
+            self.get_logger().warn(f'COLLISION DETECTED! Dist: {min_inner_dist:.3f}m | Total: {self.collision_count}')
+
 
         twist = Twist()
         
