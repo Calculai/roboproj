@@ -108,10 +108,10 @@ class Turtlebot3ObstacleDetection(Node):
         self.collision_cooldown = 2.0     # Seconds between allowed counts
         self.last_collision_time = 0.0
 
-        self.timer = self.create_timer(0.05, self.timer_callback)
+        self.timer = self.create_timer(0.1, self.timer_callback)
         self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
         self.shutdown_timer = self.create_timer(0.5, self.check_shutdown_key)
-        self.colour_timer = self.create_timer(0.1, self.update_colour_sensor)
+        self.colour_timer = self.create_timer(1.0, self.update_colour_sensor)
         self.blink_timer = self.create_timer(0.05, self.update_blink)
 
     def setup_light_sensor(self):
@@ -176,7 +176,7 @@ class Turtlebot3ObstacleDetection(Node):
             #)
 
             # Trigger blink if red is significantly higher than both green and blue
-            if red > green * 1.8 and red > blue * 1.8 and red > 0.05:
+            if red > green * 1.45 and red > blue * 1.45:
                 self.trigger_blink()
 
         except Exception as error:
@@ -263,36 +263,38 @@ class Turtlebot3ObstacleDetection(Node):
     def detect_obstacle(self):
 
         # Sector boundaries
-        left_inner_limit = int(len(self.scan_ranges) / 8)        # 45°
-        left_outer_limit = int(len(self.scan_ranges) / 4)        # 90°
+        left_front_limit = int(len(self.scan_ranges) / 20)        # 18°
+        left_inner_limit = int(len(self.scan_ranges) / (6 + 2/3)) # 54°
+        left_outer_limit = int(len(self.scan_ranges) / 4)         # 90°
 
-        right_outer_limit = int(len(self.scan_ranges) * 3 / 4)   # 270°
-        right_inner_limit = int(len(self.scan_ranges) * 7 / 8)   # 315°
+        right_front_limit = int(len(self.scan_ranges) * 19 / 20)  # 342°
+        right_outer_limit = int(len(self.scan_ranges) * 3 / 4)    # 270°
+        right_inner_limit = int(len(self.scan_ranges) * 17 / 20)  # 306°
 
         # Extract sectors and remove invalid values
-        left_inner  = [r for r in self.scan_ranges[0:left_inner_limit] if 0.12 < r < 3.5]
+        left_inner  = [r for r in self.scan_ranges[left_front_limit:left_inner_limit] if 0.12 < r < 3.5]
         left_outer  = [r for r in self.scan_ranges[left_inner_limit:left_outer_limit] if 0.12 < r < 3.5]
-
+        front_left = [r for r in self.scan_ranges[0:left_front_limit] if 0.12 < r < 3.5]
+        front_right = [r for r in self.scan_ranges[right_front_limit:] if 0.12 < r < 3.5]
+        front = front_left + front_right
         right_outer = [r for r in self.scan_ranges[right_outer_limit:right_inner_limit] if 0.12 < r < 3.5]
-        right_inner = [r for r in self.scan_ranges[right_inner_limit:] if 0.12 < r < 3.5]
+        right_inner = [r for r in self.scan_ranges[right_inner_limit:right_front_limit] if 0.12 < r < 3.5]
 
         # Compute minimum distances
         dist_left_outer = min(left_outer) if left_outer else float('inf')
         dist_left_inner = min(left_inner) if left_inner else float('inf')
-
+        dist_front = min(front) if front else float('inf')
         dist_right_inner = min(right_inner) if right_inner else float('inf')
         dist_right_outer = min(right_outer) if right_outer else float('inf')
 
         # Find minimum distance
-        x = min(dist_left_inner, dist_right_inner)
+        x = dist_front
         # Determine angular and linear velocity
         L, A = self.calculate_regression_speeds(x)
 
-        L = self.clamp_linear_velocity(L)
-
         # Collision counter logic
         current_time = self.get_clock().now().nanoseconds / 1e9
-        min_inner_dist = min(dist_left_inner, dist_right_inner)
+        min_inner_dist = min(dist_front, dist_left_inner, dist_right_inner)
 
         is_colliding = min_inner_dist < self.collision_threshold
         cooldown_elapsed = (current_time - self.last_collision_time) > self.collision_cooldown
@@ -335,6 +337,8 @@ class Turtlebot3ObstacleDetection(Node):
         else:
             twist = self.tele_twist
 
+        twist.linear.x = self.clamp_linear_velocity(twist.linear.x)
+
         # Track speed updates
         self.speed_updates += 1
         self.speed_accumulation += twist.linear.x
@@ -375,23 +379,23 @@ def main(args=None):
 
     rclpy.init(args=args)
 
-    turtlebot3_obstacle_detection = Turtlebot3ObstacleDetection()
+    tod = Turtlebot3ObstacleDetection()
 
     try:
-        while rclpy.ok() and not turtlebot3_obstacle_detection.shutdown_requested:
-            elapsed_seconds = time.monotonic() - turtlebot3_obstacle_detection.start_time
-            if elapsed_seconds >= turtlebot3_obstacle_detection.max_runtime_seconds:
-                turtlebot3_obstacle_detection.get_logger().info(
+        while rclpy.ok() and not tod.shutdown_requested:
+            elapsed_seconds = time.monotonic() - tod.start_time
+            if elapsed_seconds >= tod.max_runtime_seconds:
+                tod.get_logger().info(
                     'Auto shutdown timeout reached (120 seconds). Exiting node...'
                 )
-                turtlebot3_obstacle_detection.shutdown_requested = True
+                tod.shutdown_requested = True
                 continue
 
-            rclpy.spin_once(turtlebot3_obstacle_detection, timeout_sec=0.1)
+            rclpy.spin_once(tod, timeout_sec=0.1)
     except KeyboardInterrupt:
         pass
     finally:
-        turtlebot3_obstacle_detection.destroy_node()
+        tod.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 
