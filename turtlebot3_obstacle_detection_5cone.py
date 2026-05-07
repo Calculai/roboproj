@@ -108,10 +108,10 @@ class Turtlebot3ObstacleDetection(Node):
         self.collision_cooldown = 2.0     # Seconds between allowed counts
         self.last_collision_time = 0.0
 
-        self.timer = self.create_timer(0.1, self.timer_callback)
+        self.timer = self.create_timer(0.05, self.timer_callback)
         self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
         self.shutdown_timer = self.create_timer(0.5, self.check_shutdown_key)
-        self.colour_timer = self.create_timer(1.0, self.update_colour_sensor)
+        self.colour_timer = self.create_timer(0.2, self.update_colour_sensor)
         self.blink_timer = self.create_timer(0.05, self.update_blink)
 
     def setup_light_sensor(self):
