@@ -19,6 +19,8 @@ import sys
 import time
 import numpy as np
 from smbus2 import SMBus
+import RPi.GPIO as GPIO
+from gpiozero import LED
 
 if os.name == 'nt':
     import msvcrt
@@ -47,7 +49,20 @@ class Turtlebot3ObstacleDetection(Node):
         self.latest_rgb = {'red': 0, 'green': 0, 'blue': 0}
         self.light_sensor_enabled = self.setup_light_sensor()
 
+        # LED blink state
+        GPIO.setwarnings(False)
+        GPIO.setmode(GPIO.BCM)
+        self.led = LED(23)
+        self.blinking = False
+        self.blink_start = 0.0
+        self.last_toggle = 0.0
+        self.led_state = False
+        self.last_blink_trigger = 0.0
+        self.blink_cooldown = 2.0
+        self.targets_found = 0
+
         self.stop_distance = 0.20
+        self.max_linear_velocity = 0.22
 
         self.tele_twist = Twist()
         self.tele_twist.linear.x = 0.2
@@ -87,10 +102,17 @@ class Turtlebot3ObstacleDetection(Node):
         self.original_terminal_settings = None
         self.setup_keyboard_shutdown()
 
+        # Collision counter initialization
+        self.collision_threshold = 0.158  # Distance to count a collision
+        self.collision_count = 0
+        self.collision_cooldown = 2.0     # Seconds between allowed counts
+        self.last_collision_time = 0.0
+
         self.timer = self.create_timer(0.1, self.timer_callback)
         self.stats_timer = self.create_timer(5.0, self.log_speed_stats)
         self.shutdown_timer = self.create_timer(0.5, self.check_shutdown_key)
         self.colour_timer = self.create_timer(1.0, self.update_colour_sensor)
+        self.blink_timer = self.create_timer(0.05, self.update_blink)
 
     def setup_light_sensor(self):
         try:
@@ -104,6 +126,33 @@ class Turtlebot3ObstacleDetection(Node):
             self.i2c_bus = None
             return False
 
+    def trigger_blink(self):
+        now = time.time()
+        if now - self.last_blink_trigger >= self.blink_cooldown:
+            self.blinking = True
+            self.blink_start = now
+            self.last_toggle = now
+            self.last_blink_trigger = now
+            self.targets_found += 1
+            self.get_logger().info(f'Red dominance detected — LED blinking. Targets found: {self.targets_found}')
+
+    def update_blink(self):
+        if not self.blinking:
+            return
+
+        now = time.time()
+
+        if now - self.blink_start >= 2.0:
+            self.blinking = False
+            self.led.off()
+            self.led_state = False
+            return
+
+        if now - self.last_toggle >= 0.25:
+            self.led_state = not self.led_state
+            self.led.on() if self.led_state else self.led.off()
+            self.last_toggle = now
+
     def update_colour_sensor(self):
         if not self.light_sensor_enabled or self.i2c_bus is None:
             return
@@ -115,15 +164,21 @@ class Turtlebot3ObstacleDetection(Node):
             red = (data[3] << 8) | data[2]
             blue = (data[5] << 8) | data[4]
 
-            red = int(red * 1)
-            green = int(green * 0.75)
-            blue = int(blue * 1.5)
+            red = int(red * 1.3)/1000
+            green = int(green * 0.75)/1000
+            blue = int(blue * 1.25)/1000
 
             self.latest_rgb = {'red': red, 'green': green, 'blue': blue}
 
-            self.get_logger().info(
-                f"RGB Values -> Red: {red} | Green: {green} | Blue: {blue}"
-            )
+            # comment out in final version, useful for debugging
+            #self.get_logger().info(
+            #    f"RGB Values -> Red: {red} | Green: {green} | Blue: {blue}"
+            #)
+
+            # Trigger blink if red is significantly higher than both green and blue
+            if red > green * 1.45 and red > blue * 1.45:
+                self.trigger_blink()
+
         except Exception as error:
             self.get_logger().warn(f'Failed reading colour sensor: {error}')
 
@@ -148,6 +203,9 @@ class Turtlebot3ObstacleDetection(Node):
 
     def cmd_vel_raw_callback(self, msg):
         self.tele_twist = msg
+
+    def clamp_linear_velocity(self, linear_velocity):
+        return max(-self.max_linear_velocity, min(self.max_linear_velocity, linear_velocity))
 
     def setup_keyboard_shutdown(self):
         try:
@@ -193,8 +251,9 @@ class Turtlebot3ObstacleDetection(Node):
             self.get_logger().info(
                 f'Elapsed Time: {elapsed_seconds:.1f}s, '
                 f'Speed Updates: {self.speed_updates}, '
-                f'Speed Accumulation: {self.speed_accumulation:.2f}, '
-                f'Average Linear Speed: {average_speed:.4f} m/s'
+                f'Average Linear Speed: {average_speed:.4f} m/s, '
+                f'Targets Found: {self.targets_found}, '
+                f'Collisions: {self.collision_count}'
             )
 
     def timer_callback(self):
@@ -229,6 +288,20 @@ class Turtlebot3ObstacleDetection(Node):
         # Determine angular and linear velocity
         L, A = self.calculate_regression_speeds(x)
 
+        # Collision counter logic
+        current_time = self.get_clock().now().nanoseconds / 1e9
+        min_inner_dist = min(dist_left_inner, dist_right_inner)
+
+        is_colliding = min_inner_dist < self.collision_threshold
+        cooldown_elapsed = (current_time - self.last_collision_time) > self.collision_cooldown
+
+        if is_colliding and cooldown_elapsed:
+            self.collision_count += 1
+            self.last_collision_time = current_time
+            self.get_logger().warn(
+                f'COLLISION DETECTED! Dist: {min_inner_dist:.3f}m | Total: {self.collision_count}'
+            )
+
         twist = Twist()
         
         # Clean turn logic (uses regression values)
@@ -260,11 +333,10 @@ class Turtlebot3ObstacleDetection(Node):
         else:
             twist = self.tele_twist
 
+        twist.linear.x = self.clamp_linear_velocity(twist.linear.x)
+
         # Track speed updates
         self.speed_updates += 1
-        self.get_logger().info(
-                f'Current speed: {twist.linear.x:.1f}s'
-            )
         self.speed_accumulation += twist.linear.x
 
         self.cmd_vel_pub.publish(twist)
@@ -281,6 +353,12 @@ class Turtlebot3ObstacleDetection(Node):
                 self.i2c_bus.close()
             except Exception as error:
                 self.get_logger().warn(f'Failed to close I2C bus: {error}')
+
+        try:
+            self.led.off()
+            GPIO.cleanup()
+        except Exception as error:
+            self.get_logger().warn(f'Failed to clean up GPIO: {error}')
 
         stop_twist = Twist()
         stop_twist.linear.x = 0.0

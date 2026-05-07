@@ -25,9 +25,9 @@ def getAndUpdateColour():
             blue  = (data[5] << 8) | data[4]
 
             # calibration adjustment (if needed)
-            red = int(red * 1)
-            green = int(green * 0.75)
-            blue = int(blue * 1.5)
+            red = int(red * 1.3)/1000
+            green = int(green * 0.75)/1000
+            blue = int(blue * 1.25)/1000
 
             print(f"RGB Values -> Red: {red} | Green: {green} | Blue: {blue}")
             
