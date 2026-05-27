@@ -15,12 +15,13 @@ from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.qos import QoSProfile
 from sensor_msgs.msg import LaserScan
-import sys
 import time
 import numpy as np
 from smbus2 import SMBus
 import RPi.GPIO as GPIO
 from gpiozero import LED
+
+import sys
 
 if os.name == 'nt':
     import msvcrt
@@ -58,7 +59,7 @@ class Turtlebot3ObstacleDetection(Node):
         self.last_toggle = 0.0
         self.led_state = False
         self.last_blink_trigger = 0.0
-        self.blink_cooldown = 2.0
+        self.blink_cooldown = 1.0
         self.targets_found = 0
 
         self.stop_distance = 0.20
@@ -176,11 +177,24 @@ class Turtlebot3ObstacleDetection(Node):
             #)
 
             # Trigger blink if red is significantly higher than both green and blue
-            if red > green * 1.45 and red > blue * 1.45:
+            if red > green * 1.8 and red > blue * 1.8 and red > 0.05:
                 self.trigger_blink()
 
         except Exception as error:
             self.get_logger().warn(f'Failed reading colour sensor: {error}')
+
+    def update_collision_counter(self, min_inner_dist):
+        current_time = time.time()
+
+        is_colliding = min_inner_dist < self.collision_threshold
+        cooldown_elapsed = (current_time - self.last_collision_time) > self.collision_cooldown
+
+        if is_colliding and cooldown_elapsed:
+            self.collision_count += 1
+            self.last_collision_time = current_time
+            self.get_logger().warn(
+                f'COLLISION DETECTED! Dist: {min_inner_dist:.3f}m | Total: {self.collision_count}'
+            )
 
     def scan_callback(self, msg):
         self.scan_ranges = msg.ranges
@@ -292,19 +306,10 @@ class Turtlebot3ObstacleDetection(Node):
         # Determine angular and linear velocity
         L, A = self.calculate_regression_speeds(x)
 
+        L = self.clamp_linear_velocity(L)
+
         # Collision counter logic
-        current_time = self.get_clock().now().nanoseconds / 1e9
-        min_inner_dist = min(dist_front, dist_left_inner, dist_right_inner)
-
-        is_colliding = min_inner_dist < self.collision_threshold
-        cooldown_elapsed = (current_time - self.last_collision_time) > self.collision_cooldown
-
-        if is_colliding and cooldown_elapsed:
-            self.collision_count += 1
-            self.last_collision_time = current_time
-            self.get_logger().warn(
-                f'COLLISION DETECTED! Dist: {min_inner_dist:.3f}m | Total: {self.collision_count}'
-            )
+        self.update_collision_counter(x)
 
         twist = Twist()
         
@@ -337,7 +342,6 @@ class Turtlebot3ObstacleDetection(Node):
         else:
             twist = self.tele_twist
 
-        twist.linear.x = self.clamp_linear_velocity(twist.linear.x)
 
         # Track speed updates
         self.speed_updates += 1
@@ -346,12 +350,6 @@ class Turtlebot3ObstacleDetection(Node):
         self.cmd_vel_pub.publish(twist)
 
     def destroy_node(self):
-        if os.name != 'nt' and self.original_terminal_settings is not None and self.stdin_fd is not None:
-            try:
-                termios.tcsetattr(self.stdin_fd, termios.TCSADRAIN, self.original_terminal_settings)
-            except Exception as error:
-                self.get_logger().warn(f'Failed to restore terminal settings: {error}')
-
         if self.i2c_bus is not None:
             try:
                 self.i2c_bus.close()
@@ -363,6 +361,12 @@ class Turtlebot3ObstacleDetection(Node):
             GPIO.cleanup()
         except Exception as error:
             self.get_logger().warn(f'Failed to clean up GPIO: {error}')
+
+        if os.name != 'nt' and self.original_terminal_settings is not None and self.stdin_fd is not None:
+            try:
+                termios.tcsetattr(self.stdin_fd, termios.TCSADRAIN, self.original_terminal_settings)
+            except Exception as error:
+                self.get_logger().warn(f'Failed to restore terminal settings: {error}')
 
         stop_twist = Twist()
         stop_twist.linear.x = 0.0

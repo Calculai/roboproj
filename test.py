@@ -4,6 +4,10 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 
+# maybe add the mapping idea (make a dataset of all points and figure out valid spots and then make the minimum valid spot)
+# maybe make it find spots and then develop a curve (but issue is how to express it with twist when it is unreliable)
+# somehow make the map disfavor the direction it has already been if it encounters later
+
 from geometry_msgs.msg import Twist
 import os
 import rclpy
@@ -122,76 +126,59 @@ class Turtlebot3ObstacleDetection(Node):
 
     def setup_light_sensor(self):
         try:
-            # initialize the I2C bus and configure the ISL29125 colour sensor
             self.i2c_bus = SMBus(1)
             self.i2c_bus.write_byte_data(self.light_sensor_address, 0x01, 0x05)
             time.sleep(0.5)
             self.get_logger().info('ISL29125 colour sensor initialized.')
             return True
         except Exception as error:
-            # if initialization fails, log a warning but continue without colour sensing
             self.get_logger().warn(f'Colour sensor setup failed: {error}')
             self.i2c_bus = None
             return False
 
     def trigger_blink(self):
-        # record the time
         now = time.time()
-        # if the cooldown period has passed since the last trigger, start blinking
         if now - self.last_blink_trigger >= self.blink_cooldown:
-            # update all blink timing variables and set the blinking flag to True
             self.blinking = True
             self.blink_start = now
             self.last_toggle = now
             self.last_blink_trigger = now
             self.targets_found += 1
-            # log the detection with the current target count
             self.get_logger().info(f'Red dominance detected — LED blinking. Targets found: {self.targets_found}')
 
     def update_blink(self):
-        # if we are not currently blinking, do nothing
         if not self.blinking:
             return
 
-        # record the current time
         now = time.time()
 
-        # check if the total blink duration has passed, if so stop blinking and turn off the LED
         if now - self.blink_start >= 2.0:
             self.blinking = False
             self.led.off()
             self.led_state = False
             return
 
-        # if we are still within the blink duration, toggle the LED state every 0.25 seconds
         if now - self.last_toggle >= 0.25:
             self.led_state = not self.led_state
             self.led.on() if self.led_state else self.led.off()
             self.last_toggle = now
 
     def update_colour_sensor(self):
-        # if the light sensor is not enabled or the I2C bus is not initialized, do nothing
         if not self.light_sensor_enabled or self.i2c_bus is None:
             return
 
         try:
-            # read 6 bytes of data starting from register 0x09, which contain the green, red, and blue light intensity values
-            # address determined from datasheet
             data = self.i2c_bus.read_i2c_block_data(self.light_sensor_address, 0x09, 6)
 
-            # combine the two bytes for each colour channel and apply scaling factors to convert to approximate lux values
-            # determined through datasheet
             green = (data[1] << 8) | data[0]
             red = (data[3] << 8) | data[2]
             blue = (data[5] << 8) | data[4]
 
-            # weight the values to ensure accurate readings, and factor it to make the numbers more digestible
             red = int(red * 1.3)/1000
             green = int(green * 0.75)/1000
             blue = int(blue * 1.25)/1000
 
-            # store the latest RGB values in a dictionary for potential future use (not smth we ended up using)
-            # self.latest_rgb = {'red': red, 'green': green, 'blue': blue}
+            self.latest_rgb = {'red': red, 'green': green, 'blue': blue}
 
             # comment out in final version, useful for debugging
             #self.get_logger().info(
@@ -206,15 +193,11 @@ class Turtlebot3ObstacleDetection(Node):
             self.get_logger().warn(f'Failed reading colour sensor: {error}')
 
     def update_collision_counter(self, min_inner_dist):
-        # record current time
         current_time = time.time()
 
-        # check if the minimum distance in the inner sectors is below the collision threshold 
         is_colliding = min_inner_dist < self.collision_threshold
-        # check if the cooldown period has elapsed since the last collision was counted
         cooldown_elapsed = (current_time - self.last_collision_time) > self.collision_cooldown
 
-        # if both conditions are met, increment the collision count, update the last collision time, and log a warning with the current count
         if is_colliding and cooldown_elapsed:
             self.collision_count += 1
             self.last_collision_time = current_time
@@ -235,10 +218,10 @@ class Turtlebot3ObstacleDetection(Node):
             return 0.0, 1.8
 
         # L: linear velocity regression (1.1 * distance)
-        v_linear = (1.1 * distance) 
+        v_linear = (0.55 * distance) 
         
         # A: angular velocity regression (-9.0 * distance + 3.6)
-        v_angular = (-9.0 * distance) + 3.6
+        v_angular = (-2.5 * distance) + 1
         
         return round(v_linear, 3), round(v_angular, 3)
 
